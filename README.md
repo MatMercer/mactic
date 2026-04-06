@@ -6,7 +6,18 @@ Command-line tool to send haptic waveforms and visualize multitouch input on the
 
 Uses Apple's private `MultitouchSupport.framework` to directly drive the haptic actuator and read raw touch data — no Xcode project or Swift required.
 
-## Quick install
+## Requirements
+
+- MacBook with Force Touch trackpad (2015+)
+- macOS (tested on M3 MacBook Pro, macOS Sequoia)
+
+## Install
+
+```bash
+brew install matmercer/tap/mactic
+```
+
+### Manual install
 
 ```bash
 sudo curl -L https://github.com/MatMercer/mactic/releases/latest/download/mactic -o /usr/local/bin/mactic && sudo chmod +x /usr/local/bin/mactic
@@ -18,35 +29,16 @@ mactic -a
 mactic -l
 ```
 
-## Requirements
+### Compiling and installing yourself
 
-- MacBook with Force Touch trackpad (2015+)
-- macOS (tested on M3 MacBook Pro, macOS Sequoia)
-- Xcode Command Line Tools — provides `clang`, `make`, and the macOS SDK headers
-
-## Install
+Requires Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
-# install Xcode Command Line Tools if you don't have them
-xcode-select --install
-
-# clone and build
-git clone https://github.com/user/mactic.git
+git clone https://github.com/MatMercer/mactic.git
 cd mactic
 make
-
-# optionally copy to your PATH
 cp mactic /usr/local/bin/
 ```
-
-## Build
-
-```
-make          # build
-make clean    # remove binary
-```
-
-The build uses `clang` (provided by Xcode CLT) and links against three frameworks: `MultitouchSupport` (private), `CoreFoundation`, and `IOKit`. No third-party dependencies.
 
 ## Usage
 
