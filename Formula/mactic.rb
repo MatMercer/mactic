@@ -1,7 +1,8 @@
 class Mactic < Formula
   desc "Send haptic waveforms and visualize multitouch input on MacBook trackpads"
   homepage "https://github.com/MatMercer/mactic"
-  url "https://github.com/MatMercer/mactic/releases/download/v1/mactic-macos.tar.gz"
+  url "https://github.com/MatMercer/mactic/releases/download/v2.0/mactic-macos.tar.gz"
+  version "2.0"
   sha256 "TODO"
   license "Unlicense"
 
