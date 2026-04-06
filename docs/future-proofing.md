@@ -47,7 +47,7 @@ int main(void) {
 }
 ```
 
-Match the output against the `mt-device-id` from `ioreg`. Update `MTDEVICE_ID_OFFSET` in `haptic.c` to the new offset.
+Match the output against the `mt-device-id` from `ioreg`. Update `MTDEVICE_ID_OFFSET` in `mactic.c` to the new offset.
 
 ### 2. MTTouch struct layout changes
 
@@ -77,7 +77,7 @@ Touch the trackpad and look for:
 - **Pressure** — a float that increases when you press harder
 - **Velocity** — floats that are zero when still, nonzero when moving
 
-Update the `MTTouch` struct definition in `haptic.c` accordingly.
+Update the `MTTouch` struct definition in `mactic.c` accordingly.
 
 ### 3. Function signatures change
 
@@ -117,7 +117,7 @@ Search for where the symbols moved:
 dyld_info -exports /System/Library/dyld/dyld_shared_cache_arm64e 2>&1 | grep MTActuator
 ```
 
-If the symbols still exist under a different framework path, update `MT_FW` in `haptic.c`.
+If the symbols still exist under a different framework path, update `MT_FW` in `mactic.c`.
 
 ### 5. Waveform IDs change
 
@@ -127,7 +127,13 @@ The waveform IDs (1-6, 15, 16) are firmware-level constants. A firmware update c
 
 **How to fix:**
 
-Use `./mactic -l` to cycle through IDs 1-20 and re-map which ID produces which sensation. There's no programmatic way to query waveform names — you have to feel them.
+Use `mactic -l` to cycle through IDs 1-20 and re-map which ID produces which sensation. There's no programmatic way to query waveform names — you have to feel them.
+
+### 6. Actuator single-shot behavior changes
+
+Currently, the actuator handle is single-shot: after one `MTActuatorActuate` call, subsequent calls on the same handle return success but produce no haptic output. Chain (`-c`), repeat (`-r`), and list (`-l`) modes work around this by fully recreating the actuator (create + open + actuate + close + release) for each firing.
+
+If Apple changes this behavior (e.g., makes the handle reusable), the current approach still works — it's just slightly less efficient than reusing the handle. If Apple makes `MTActuatorCreateFromDeviceID` fail on rapid successive calls, the workaround would be to try close/reopen on the same handle first.
 
 ## General debugging tips
 

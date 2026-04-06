@@ -4,12 +4,13 @@ Complete technical documentation of how `mactic` works, from framework loading t
 
 ## Architecture overview
 
-`mactic` is a single-file C program (~660 lines) that interfaces with Apple's private `MultitouchSupport.framework` to both send haptic waveforms and read raw multitouch data from the Force Touch trackpad. It has four operating modes:
+`mactic` is a single-file C program (~800 lines) that interfaces with Apple's private `MultitouchSupport.framework` to both send haptic waveforms and read raw multitouch data from the Force Touch trackpad. It has five operating modes:
 
 1. **Actuate** (default) — send a haptic waveform
-2. **Listen** (`-f`) — stream raw touch data to stdout
-3. **ASCII viewer** (`-a`) — real-time braille heatmap in the terminal
-4. **Scan** (`-s`) — enumerate multitouch devices
+2. **Chain** (`-c`) — play a sequence of waveforms with per-step delays
+3. **Listen** (`-f`) — stream raw touch data to stdout
+4. **ASCII viewer** (`-a`) — real-time braille heatmap in the terminal
+5. **Scan** (`-s`) — enumerate multitouch devices
 
 All modes share a common framework loading and device discovery layer.
 
@@ -184,6 +185,38 @@ CFRelease(actuator)                                // free CF object
 
 The actuator is a Core Foundation type (CFTypeRef) and must be released.
 
+### Single-shot behavior
+
+The actuator handle appears to be single-shot — after one `MTActuatorActuate` call, the handle is spent. Subsequent calls on the same handle return success but produce no haptic feedback. To fire multiple times, you must fully recreate the actuator (create + open) before each actuation. This applies to repeat mode (`-r`), list mode (`-l`), and chain mode (`-c`).
+
+## Chain mode (-c)
+
+Chain mode plays a sequence of waveforms with configurable per-step delays. The input format is a space-separated string where each token is `W[:ms]` — a waveform ID optionally followed by a delay in milliseconds (default 200ms). The delay after the last step is not applied.
+
+```
+mactic -c '6:297 6:375 6'    →  waveform 6, 297ms, waveform 6, 375ms, waveform 6
+```
+
+### Parsing
+
+The sequence string is duplicated (`strdup`) and tokenized with `strtok_r`. Each token is split on `:` to extract the waveform ID and optional delay. Both values are validated with `strtol`-based parsing (waveform: 1-20, delay: 0-60000ms).
+
+### Execution
+
+Because of the single-shot actuator behavior, each chain step creates a fresh actuator:
+
+```
+for each step:
+    actuator = MTActuatorCreateFromDeviceID(deviceID)
+    MTActuatorOpen(actuator, 0)
+    MTActuatorActuate(actuator, waveform, 0, 0, 0)
+    MTActuatorClose(actuator)
+    CFRelease(actuator)
+    if more steps: usleep(delay)
+```
+
+This mirrors exactly what happens when running separate `mactic -w` invocations.
+
 ## Listen mode (-f)
 
 Registers a contact frame callback and runs a CFRunLoop:
@@ -323,7 +356,7 @@ Colors are applied using 24-bit truecolor ANSI escape sequences (`\033[38;2;R;G;
 
 ### Flicker-free rendering
 
-The entire frame is built in a 256KB static buffer (`ob[]`) using `ob_s()` (string append) and `ob_f()` (printf append), then flushed to stdout with a single `write()` syscall. This avoids the tearing that would occur if individual characters were written separately.
+The entire frame is built in a 256KB static buffer (`ob[]`) using `ob_s()` (string append) and `ob_f()` (printf append), then flushed to stdout via `ob_flush()` which loops on `write()` to handle partial writes. This avoids the tearing that would occur if individual characters were written separately.
 
 Terminal control:
 - **Alternate screen buffer** (`\033[?1049h`): The viewer runs in a separate screen buffer so the normal terminal content is preserved when exiting.
@@ -337,9 +370,11 @@ Touch data arrives via the contact frame callback at ~125 Hz. But rendering at 1
 
 The solution splits input from rendering:
 
-- **Touch callback** (`ascii_touch_cb`): Fires at 125 Hz. Does nothing except copy the latest touch data into a shared buffer (`a_touches[]`, `a_nfingers`). Runs on the CFRunLoop's main thread.
+- **Touch callback** (`ascii_touch_cb`): Fires at 125 Hz on an internal framework thread. Copies the latest touch data into shared buffers (`a_shared_touches[]`, `a_shared_nfingers`) under an `os_unfair_lock`.
 
-- **Render timer** (`ascii_timer_cb`): Fires at 30 fps via `CFRunLoopTimerCreate`. Handles decay, painting, and rendering. Also runs on the main thread, serialized with the callback (no concurrency issues).
+- **Render timer** (`ascii_timer_cb`): Fires at 30 fps via `CFRunLoopTimerCreate` on the main thread. Snapshots the shared buffers into render-local globals (`a_touches[]`, `a_nfingers`) under the same lock, then handles decay, painting, and rendering without holding the lock.
+
+The lock ensures the render timer never reads a partially-updated touch frame from the callback thread.
 
 This ensures smooth 30fps output regardless of the input rate, and the heat buffer continues to decay even when no fingers are touching (so residual heat fades after lifting).
 
@@ -353,7 +388,24 @@ On SIGINT (ctrl-c):
 
 ## Signal handling
 
-Both listen and ASCII modes install a SIGINT handler. The handler sets a flag and calls `CFRunLoopStop()` to wake the runloop immediately (otherwise we'd wait up to 1 second for the timeout). `g_running` is declared `volatile sig_atomic_t` for signal safety.
+Both listen and ASCII modes install a SIGINT handler via `sigaction` (not `signal`, which has unspecified re-arm behavior across platforms). The handler sets a flag and calls `CFRunLoopStop()` to wake the runloop immediately (otherwise we'd wait up to 1 second for the timeout). `g_running` is declared `volatile sig_atomic_t` for signal safety.
+
+## Terminal cleanup
+
+An `atexit` handler (`cleanup_terminal`) ensures the terminal is restored even on unexpected `exit()` calls or signal-induced termination. It restores raw mode and exits the alternate screen buffer if active. Both listen and ASCII modes call `cleanup_terminal()` explicitly on normal exit as well.
+
+## Input validation
+
+All command-line arguments with numeric values (`-w`, `-d`, `-r`, `-i`, and each token in `-c`) are parsed via `parse_long()`, a safe `strtol` wrapper that rejects trailing garbage, empty strings, and overflow. Each argument has range validation:
+
+| Flag | Range | Error on invalid |
+|------|-------|-----------------|
+| `-w` | 1–20 | yes |
+| `-r` | >= 1 | yes |
+| `-i` | 1–60000 ms | yes |
+| `-c` waveform | 1–20 | yes (per step) |
+| `-c` delay | 0–60000 ms | yes (per step) |
+| `-d` | any valid long | yes |
 
 ## Build system
 

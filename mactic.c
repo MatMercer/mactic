@@ -661,6 +661,9 @@ static void usage(const char *prog) {
         "                  4 = light tap\n"
         "                  5 = medium tap\n"
         "                  6 = strong tap\n"
+        "  -c <seq>      Chain: play a sequence of waveforms with delays\n"
+        "                  Format: 'W[:ms] W[:ms] ...'\n"
+        "                  W = waveform ID, ms = delay after (default: 200)\n"
         "  -d <deviceID> Multitouch device ID (default: auto-detect)\n"
         "  -r <count>    Repeat count (default: 1)\n"
         "  -i <ms>       Interval between repeats in milliseconds (default: 200)\n"
@@ -673,9 +676,10 @@ static void usage(const char *prog) {
         "  %s -f              # stream live touch data\n"
         "  %s -w 2            # single strong click\n"
         "  %s -w 3 -r 3       # buzz three times\n"
+        "  %s -c '6:100 2:500 2'  # chain: 6, 100ms, 2, 500ms, 2\n"
         "  %s -l              # cycle through waveforms 1-20\n"
         "  %s -s              # scan for devices\n",
-        prog, prog, prog, prog, prog, prog, prog);
+        prog, prog, prog, prog, prog, prog, prog, prog);
 }
 
 int main(int argc, char *argv[]) {
@@ -687,9 +691,10 @@ int main(int argc, char *argv[]) {
     int scan_mode = 0;
     int listen_mode = 0;
     int ascii_mode = 0;
+    const char *chain_seq = NULL;
     int opt;
 
-    while ((opt = getopt(argc, argv, "w:d:r:i:aflsh")) != -1) {
+    while ((opt = getopt(argc, argv, "w:d:r:i:c:aflsh")) != -1) {
         long val;
         switch (opt) {
         case 'w':
@@ -720,6 +725,7 @@ int main(int argc, char *argv[]) {
             }
             interval_ms = (int)val;
             break;
+        case 'c': chain_seq = optarg; break;
         case 'a': ascii_mode = 1; break;
         case 'f': listen_mode = 1; break;
         case 'l': list_mode = 1; break;
@@ -767,7 +773,72 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (list_mode) {
+    if (chain_seq) {
+        // Chain mode manages its own actuator lifecycle per step
+        pMTActuatorClose(actuator);
+        CFRelease(actuator);
+        actuator = NULL;
+
+        char *buf = strdup(chain_seq);
+        if (!buf) { fprintf(stderr, "error: out of memory\n"); return 1; }
+        char *saveptr;
+        char *tok = strtok_r(buf, " ", &saveptr);
+        int step = 0;
+        while (tok) {
+            char *colon = strchr(tok, ':');
+            int delay_ms = 200;
+            if (colon) {
+                *colon = '\0';
+                long dval;
+                if (parse_long(colon + 1, &dval) != 0 || dval < 0 || dval > 60000) {
+                    fprintf(stderr, "error: invalid delay '%s' in chain step %d\n", colon + 1, step + 1);
+                    free(buf);
+                    return 1;
+                }
+                delay_ms = (int)dval;
+            }
+            long wval;
+            if (parse_long(tok, &wval) != 0 || wval < 1 || wval > 20) {
+                fprintf(stderr, "error: invalid waveform '%s' in chain step %d (1-20)\n", tok, step + 1);
+                free(buf);
+                return 1;
+            }
+
+            // Fresh actuator per step — mirrors separate invocations
+            CFTypeRef act = pMTActuatorCreateFromDeviceID((uint64_t)deviceID);
+            if (!act) {
+                fprintf(stderr, "error: could not create actuator at step %d\n", step + 1);
+                free(buf);
+                return 1;
+            }
+            ret = pMTActuatorOpen(act, 0);
+            if (ret != kIOReturnSuccess) {
+                fprintf(stderr, "error: MTActuatorOpen failed at step %d (0x%x)\n", step + 1, ret);
+                CFRelease(act);
+                free(buf);
+                return 1;
+            }
+            ret = pMTActuatorActuate(act, (int32_t)wval, 0, 0, 0);
+            pMTActuatorClose(act);
+            CFRelease(act);
+
+            if (ret != kIOReturnSuccess) {
+                fprintf(stderr, "error: MTActuatorActuate(%ld) failed at step %d (0x%x)\n", wval, step + 1, ret);
+                free(buf);
+                return 1;
+            }
+            printf("  step %d: waveform %ld\n", step + 1, wval);
+
+            char *next = strtok_r(NULL, " ", &saveptr);
+            if (next)
+                usleep((useconds_t)delay_ms * 1000);
+            tok = next;
+            step++;
+        }
+        free(buf);
+        printf("Chain complete (%d steps)\n", step);
+        return 0;
+    } else if (list_mode) {
         printf("Cycling through waveforms 1-20 (500ms apart)...\n");
         for (int32_t w = 1; w <= 20; w++) {
             printf("  waveform %2d: ", w);
@@ -777,7 +848,9 @@ int main(int argc, char *argv[]) {
                 printf("ok\n");
             else
                 printf("failed (0x%x)\n", ret);
+            pMTActuatorClose(actuator);
             usleep(500000);
+            pMTActuatorOpen(actuator, 0);
         }
     } else {
         for (int i = 0; i < repeat; i++) {
@@ -786,8 +859,11 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "error: MTActuatorActuate(%d) failed (0x%x)\n", waveform, ret);
                 break;
             }
-            if (i < repeat - 1)
+            if (i < repeat - 1) {
+                pMTActuatorClose(actuator);
                 usleep((useconds_t)interval_ms * 1000);
+                pMTActuatorOpen(actuator, 0);
+            }
         }
         if (ret == kIOReturnSuccess)
             printf("Actuated waveform %d x%d\n", waveform, repeat);

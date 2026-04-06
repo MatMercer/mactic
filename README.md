@@ -55,6 +55,9 @@ Options:
                   4 = light tap
                   5 = medium tap
                   6 = strong tap
+  -c <seq>      Chain: play a sequence of waveforms with delays
+                  Format: 'W[:ms] W[:ms] ...'
+                  W = waveform ID, ms = delay after (default: 200)
   -d <deviceID> Multitouch device ID (default: auto-detect)
   -r <count>    Repeat count (default: 1)
   -i <ms>       Interval between repeats in milliseconds (default: 200)
@@ -63,29 +66,49 @@ Options:
   -h            Show this help
 ```
 
+## Fun chains
+
+```bash
+# Door knock
+mactic -c '6:297 6:375 6'
+
+# Heartbeat
+mactic -c '2:150 2:400 2:150 2'
+
+# SOS (... --- ...)
+mactic -c '4:100 4:100 4:300 6:200 6:200 6:300 4:100 4:100 4'
+
+# Drum roll
+mactic -c '4:80 4:79 4:83 4:70 4:82 4:81 4:74 4:84 4:77 4:53 6'
+
+# Countdown
+mactic -c '5:1000 5:1000 5:1000 2'
+```
+
+
 ## Examples
 
 ```bash
 # ascii pressure heatmap (esc/q to quit)
-./mactic -a
+mactic -a
 
 # stream live touch data (esc/q to quit)
-./mactic -f
+mactic -f
 
 # single strong click
-./mactic -w 2
+mactic -w 2
 
 # buzz three times
-./mactic -w 3 -r 3
+mactic -w 3 -r 3
 
 # rapid light taps
-./mactic -w 4 -r 5 -i 100
+mactic -w 4 -r 5 -i 100
 
 # feel all waveforms 1-20
-./mactic -l
+mactic -l
 
 # scan for multitouch devices
-./mactic -s
+mactic -s
 ```
 
 ## ASCII pressure viewer
