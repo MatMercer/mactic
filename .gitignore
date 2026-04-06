@@ -1,0 +1,4 @@
+haptic
+*.o
+*.dSYM/
+.DS_Store
