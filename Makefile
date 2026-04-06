@@ -10,7 +10,7 @@ TARGET  = mactic
 
 all: $(TARGET)
 
-$(TARGET): haptic.c
+$(TARGET): mactic.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 clean:
