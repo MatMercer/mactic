@@ -425,7 +425,7 @@ static void ascii_render(void) {
     }
 
     // Header
-    ob_f(" \033[1mhaptic\033[22m \033[38;5;240m│\033[0m %d×%dmm "
+    ob_f(" \033[1mmactic\033[22m \033[38;5;240m│\033[0m %d×%dmm "
          "\033[38;5;240m│\033[0m esc/q to quit\033[K\n",
          (int)TRACKPAD_W_MM, (int)TRACKPAD_H_MM);
 

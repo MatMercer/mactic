@@ -1,4 +1,4 @@
-# haptic
+# mactic
 
 Command-line tool to send haptic waveforms and visualize multitouch input on the Force Touch trackpad of MacBooks.
 
@@ -19,7 +19,7 @@ make
 ## Usage
 
 ```
-haptic [options]
+mactic [options]
 
 Options:
   -a            ASCII pressure viewer (braille heatmap in the terminal)
@@ -43,25 +43,25 @@ Options:
 
 ```bash
 # ascii pressure heatmap (esc/q to quit)
-./haptic -a
+./mactic -a
 
 # stream live touch data (esc/q to quit)
-./haptic -f
+./mactic -f
 
 # single strong click
-./haptic -w 2
+./mactic -w 2
 
 # buzz three times
-./haptic -w 3 -r 3
+./mactic -w 3 -r 3
 
 # rapid light taps
-./haptic -w 4 -r 5 -i 100
+./mactic -w 4 -r 5 -i 100
 
 # feel all waveforms 1-20
-./haptic -l
+./mactic -l
 
 # scan for multitouch devices
-./haptic -s
+./mactic -s
 ```
 
 ## ASCII pressure viewer

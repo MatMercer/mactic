@@ -1,10 +1,10 @@
 # Implementation
 
-Complete technical documentation of how `haptic` works, from framework loading to terminal rendering.
+Complete technical documentation of how `mactic` works, from framework loading to terminal rendering.
 
 ## Architecture overview
 
-`haptic` is a single-file C program (~660 lines) that interfaces with Apple's private `MultitouchSupport.framework` to both send haptic waveforms and read raw multitouch data from the Force Touch trackpad. It has four operating modes:
+`mactic` is a single-file C program (~660 lines) that interfaces with Apple's private `MultitouchSupport.framework` to both send haptic waveforms and read raw multitouch data from the Force Touch trackpad. It has four operating modes:
 
 1. **Actuate** (default) — send a haptic waveform
 2. **Listen** (`-f`) — stream raw touch data to stdout

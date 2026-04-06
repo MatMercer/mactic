@@ -127,7 +127,7 @@ The waveform IDs (1-6, 15, 16) are firmware-level constants. A firmware update c
 
 **How to fix:**
 
-Use `./haptic -l` to cycle through IDs 1-20 and re-map which ID produces which sensation. There's no programmatic way to query waveform names — you have to feel them.
+Use `./mactic -l` to cycle through IDs 1-20 and re-map which ID produces which sensation. There's no programmatic way to query waveform names — you have to feel them.
 
 ## General debugging tips
 
