@@ -14,13 +14,67 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build
-        run: make
+      - name: Build universal binary
+        run: |
+          make clean
+          make CFLAGS="-Wall -Wextra -O2 -target arm64-apple-macos11"
+          mv mactic mactic-arm64
+
+          make clean
+          make CFLAGS="-Wall -Wextra -O2 -target x86_64-apple-macos11"
+          mv mactic mactic-x86_64
+
+          lipo -create -output mactic mactic-arm64 mactic-x86_64
+          file mactic
+
+      - name: Package binary
+        run: |
+          tar czf mactic-macos.tar.gz mactic
 
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ github.ref_name }}" ./mactic \
+          gh release create "${{ github.ref_name }}" ./mactic-macos.tar.gz \
             --title "${{ github.ref_name }}" \
             --generate-notes
+
+      - name: Update Homebrew tap
+        env:
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          URL="https://github.com/MatMercer/mactic/releases/download/${TAG}/mactic-macos.tar.gz"
+          SHA=$(curl -sL "$URL" | shasum -a 256 | awk '{print $1}')
+
+          # Clone the tap repo
+          gh repo clone MatMercer/homebrew-tap /tmp/homebrew-tap
+
+          # Generate formula
+          cat > /tmp/homebrew-tap/mactic.rb << EOF
+          class Mactic < Formula
+            desc "Send haptic waveforms and visualize multitouch input on MacBook trackpads"
+            homepage "https://github.com/MatMercer/mactic"
+            url "${URL}"
+            sha256 "${SHA}"
+            license "Unlicense"
+
+            depends_on :macos
+
+            def install
+              bin.install "mactic"
+            end
+
+            test do
+              assert_match "Usage:", shell_output("#{bin}/mactic -h 2>&1", 0)
+            end
+          end
+          EOF
+
+          # Commit and push
+          cd /tmp/homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add mactic.rb
+          git commit -m "mactic ${TAG}"
+          git push
