@@ -32,6 +32,7 @@ Options:
   -d <deviceID> Multitouch device ID (default: auto-detect)
   -r <count>    Repeat count (default: 1)
   -i <ms>       Interval between repeats in milliseconds (default: 200)
+  -f            Listen: stream live touch data (position, pressure, etc.)
   -l            List: actuate waveforms 1-20 with a pause between each
   -s            Scan: list multitouch devices and exit
   -h            Show this help
@@ -54,6 +55,25 @@ Options:
 
 # scan for multitouch devices
 ./haptic -s
+
+# stream live touch data (ctrl-c to stop)
+./haptic -f
+```
+
+### Listen mode output
+
+`-f` streams per-frame touch data including:
+
+- **position** — normalized (0-1) and absolute (mm)
+- **pressure** — total pressure and Z-axis pressure
+- **velocity** — normalized and absolute (mm/s)
+- **touch geometry** — size, ellipse angle, major/minor axis, density
+- **state** — touch phase (start, touch, press, lift, etc.)
+- **finger tracking** — path index, finger ID, hand ID
+
+```
+frame 38     t=981719.5870  fingers=1
+  [4] state=touch  pos=(0.503, 0.336)  vel=(0.000, 0.000)  pressure=60.0  size=1.418  angle=1.09  axis=(11.14, 9.25)  density=3.09  abs_x=30.1mm  abs_vel=(0.0, 0.0)mm/s  zPressure=1.398
 ```
 
 ## How it works
