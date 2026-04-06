@@ -1,6 +1,8 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOReturn.h>
+#include <inttypes.h>
 #include <math.h>
+#include <os/lock.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -11,6 +13,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include <errno.h>
 
 // MultitouchSupport private framework — loaded dynamically to get correct
 // calling conventions on arm64e (pointer authentication can break extern decls).
@@ -134,8 +137,8 @@ static int64_t find_trackpad_device_id(int verbose) {
         void *dev = (void *)CFArrayGetValueAtIndex(devices, i);
         uint64_t devID = mt_device_get_id(dev);
         if (verbose)
-            printf("  [%ld] device ID: %llu (0x%llx)\n", (long)i,
-                   (unsigned long long)devID, (unsigned long long)devID);
+            printf("  [%ld] device ID: %" PRIu64 " (0x%" PRIx64 ")\n",
+                   (long)i, devID, devID);
         CFTypeRef act = pMTActuatorCreateFromDeviceID(devID);
         if (act) {
             IOReturn ret = pMTActuatorOpen(act, 0);
@@ -168,10 +171,12 @@ static void sigint_handler(int sig) {
 
 static struct termios g_orig_termios;
 static int g_raw_mode = 0;
+static int g_alt_screen = 0;
+static void cleanup_terminal(void);
 
 static void raw_mode_enable(void) {
     if (!isatty(STDIN_FILENO)) return;
-    tcgetattr(STDIN_FILENO, &g_orig_termios);
+    if (tcgetattr(STDIN_FILENO, &g_orig_termios) != 0) return;
     struct termios raw = g_orig_termios;
     raw.c_lflag &= ~(ICANON | ECHO);
     raw.c_cc[VMIN] = 0;
@@ -217,8 +222,17 @@ static CFFileDescriptorRef stdin_source_setup(void) {
 // Suppress "*** Recognized" noise the framework prints to stdout/stderr
 static void mt_device_start_quiet(void *dev) {
     fflush(stdout); fflush(stderr);
-    int so = dup(STDOUT_FILENO), se = dup(STDERR_FILENO);
+    int so = dup(STDOUT_FILENO);
+    int se = dup(STDERR_FILENO);
     int nul = open("/dev/null", O_WRONLY);
+    if (so < 0 || se < 0 || nul < 0) {
+        // Can't suppress output — start anyway
+        if (so >= 0) close(so);
+        if (se >= 0) close(se);
+        if (nul >= 0) close(nul);
+        pMTDeviceStart(dev, 0);
+        return;
+    }
     dup2(nul, STDOUT_FILENO); dup2(nul, STDERR_FILENO); close(nul);
     pMTDeviceStart(dev, 0);
     fflush(stdout); fflush(stderr);
@@ -275,10 +289,13 @@ static int run_listen_mode(void) {
     }
     void *dev = (void *)CFArrayGetValueAtIndex(devices, 0);
     uint64_t devID = mt_device_get_id(dev);
-    printf("Listening on device %llu — touch the trackpad (esc/q/ctrl-c to stop)\n\n",
-           (unsigned long long)devID);
-    signal(SIGINT, sigint_handler);
+    printf("Listening on device %" PRIu64 " — touch the trackpad (esc/q/ctrl-c to stop)\n\n",
+           devID);
+    struct sigaction sa = { .sa_handler = sigint_handler };
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, NULL);
     g_runloop = CFRunLoopGetCurrent();
+    atexit(cleanup_terminal);
     raw_mode_enable();
     CFFileDescriptorRef fdref = stdin_source_setup();
     pMTRegisterContactFrameCallback(dev, touch_callback);
@@ -288,7 +305,7 @@ static int run_listen_mode(void) {
     pMTDeviceStop(dev);
     CFRelease(devices);
     if (fdref) CFRelease(fdref);
-    raw_mode_disable();
+    cleanup_terminal();
     printf("\nStopped.\n");
     return 0;
 }
@@ -305,6 +322,10 @@ static float a_pmax = 1.4f;  // size field: ~0.3 (light) to ~1.35 (hard press)
 
 static MTTouch a_touches[MAX_FINGERS];
 static int     a_nfingers;
+// Shared buffers written by the MT callback thread, read by the timer
+static MTTouch a_shared_touches[MAX_FINGERS];
+static int     a_shared_nfingers;
+static os_unfair_lock a_lock = OS_UNFAIR_LOCK_INIT;
 static int     a_first = 1;
 
 // Flicker-free output buffer
@@ -326,7 +347,15 @@ static void ob_f(const char *fmt, ...) {
     if (n > 0 && ob_n + n < OB_SZ) ob_n += n;
 }
 
-static void ob_flush(void) { write(STDOUT_FILENO, ob, ob_n); ob_n = 0; }
+static void ob_flush(void) {
+    int off = 0;
+    while (off < ob_n) {
+        ssize_t w = write(STDOUT_FILENO, ob + off, ob_n - off);
+        if (w <= 0) break;
+        off += (int)w;
+    }
+    ob_n = 0;
+}
 
 // Braille: U+2800 + bit pattern
 //   col0: row0=bit0  row1=bit1  row2=bit2  row3=bit6
@@ -518,13 +547,23 @@ static void ascii_render(void) {
 static void ascii_touch_cb(void *device, MTTouch *touches, int nFingers,
                             double timestamp, int frame) {
     (void)device; (void)timestamp; (void)frame;
-    a_nfingers = nFingers > MAX_FINGERS ? MAX_FINGERS : nFingers;
-    if (nFingers > 0)
-        memcpy(a_touches, touches, a_nfingers * sizeof(MTTouch));
+    int n = nFingers > MAX_FINGERS ? MAX_FINGERS : nFingers;
+    os_unfair_lock_lock(&a_lock);
+    a_shared_nfingers = n;
+    if (n > 0)
+        memcpy(a_shared_touches, touches, n * sizeof(MTTouch));
+    os_unfair_lock_unlock(&a_lock);
 }
 
 static void ascii_timer_cb(CFRunLoopTimerRef timer, void *info) {
     (void)timer; (void)info;
+
+    // Snapshot shared touch state into render-local globals
+    os_unfair_lock_lock(&a_lock);
+    a_nfingers = a_shared_nfingers;
+    if (a_nfingers > 0)
+        memcpy(a_touches, a_shared_touches, a_nfingers * sizeof(MTTouch));
+    os_unfair_lock_unlock(&a_lock);
 
     // Decay heat
     for (int y = 0; y < a_dh; y++)
@@ -553,12 +592,16 @@ static int run_ascii_mode(void) {
 
     ascii_init();
 
-    signal(SIGINT, sigint_handler);
+    struct sigaction sa = { .sa_handler = sigint_handler };
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, NULL);
     g_runloop = CFRunLoopGetCurrent();
     raw_mode_enable();
     CFFileDescriptorRef fdref = stdin_source_setup();
 
-    // Alternate screen buffer
+    // Alternate screen buffer — atexit ensures restore on abnormal exit
+    atexit(cleanup_terminal);
+    g_alt_screen = 1;
     printf("\033[?1049h\033[?25l");
     fflush(stdout);
 
@@ -580,14 +623,29 @@ static int run_ascii_mode(void) {
     CFRelease(devices);
     if (fdref) CFRelease(fdref);
 
-    // Restore terminal
-    raw_mode_disable();
-    printf("\033[?25h\033[?1049l");
-    fflush(stdout);
+    cleanup_terminal();
     return 0;
 }
 
 // ── Main ────────────────────────────────────────────────────────────
+
+static void cleanup_terminal(void) {
+    if (g_alt_screen) {
+        printf("\033[?25h\033[?1049l");
+        fflush(stdout);
+        g_alt_screen = 0;
+    }
+    raw_mode_disable();
+}
+
+static int parse_long(const char *s, long *out) {
+    char *end;
+    errno = 0;
+    long val = strtol(s, &end, 0);
+    if (errno != 0 || end == s || *end != '\0') return -1;
+    *out = val;
+    return 0;
+}
 
 static void usage(const char *prog) {
     fprintf(stderr,
@@ -632,11 +690,36 @@ int main(int argc, char *argv[]) {
     int opt;
 
     while ((opt = getopt(argc, argv, "w:d:r:i:aflsh")) != -1) {
+        long val;
         switch (opt) {
-        case 'w': waveform = atoi(optarg); break;
-        case 'd': deviceID = strtoll(optarg, NULL, 0); break;
-        case 'r': repeat = atoi(optarg); break;
-        case 'i': interval_ms = atoi(optarg); break;
+        case 'w':
+            if (parse_long(optarg, &val) != 0 || val < 1 || val > 20) {
+                fprintf(stderr, "error: invalid waveform '%s' (1-20)\n", optarg);
+                return 1;
+            }
+            waveform = (int32_t)val;
+            break;
+        case 'd':
+            if (parse_long(optarg, &val) != 0) {
+                fprintf(stderr, "error: invalid device ID '%s'\n", optarg);
+                return 1;
+            }
+            deviceID = (int64_t)val;
+            break;
+        case 'r':
+            if (parse_long(optarg, &val) != 0 || val < 1) {
+                fprintf(stderr, "error: invalid repeat count '%s'\n", optarg);
+                return 1;
+            }
+            repeat = (int)val;
+            break;
+        case 'i':
+            if (parse_long(optarg, &val) != 0 || val < 1 || val > 60000) {
+                fprintf(stderr, "error: invalid interval '%s' (1-60000 ms)\n", optarg);
+                return 1;
+            }
+            interval_ms = (int)val;
+            break;
         case 'a': ascii_mode = 1; break;
         case 'f': listen_mode = 1; break;
         case 'l': list_mode = 1; break;
@@ -668,12 +751,12 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "error: no haptic-capable device found\n");
             return 1;
         }
-        printf("Using device ID: %lld\n\n", deviceID);
+        printf("Using device ID: %" PRId64 "\n\n", deviceID);
     }
 
     CFTypeRef actuator = pMTActuatorCreateFromDeviceID((uint64_t)deviceID);
     if (!actuator) {
-        fprintf(stderr, "error: could not create actuator for device %lld\n", deviceID);
+        fprintf(stderr, "error: could not create actuator for device %" PRId64 "\n", deviceID);
         return 1;
     }
 
@@ -694,7 +777,7 @@ int main(int argc, char *argv[]) {
                 printf("ok\n");
             else
                 printf("failed (0x%x)\n", ret);
-            usleep(500 * 1000);
+            usleep(500000);
         }
     } else {
         for (int i = 0; i < repeat; i++) {
@@ -704,7 +787,7 @@ int main(int argc, char *argv[]) {
                 break;
             }
             if (i < repeat - 1)
-                usleep(interval_ms * 1000);
+                usleep((useconds_t)interval_ms * 1000);
         }
         if (ret == kIOReturnSuccess)
             printf("Actuated waveform %d x%d\n", waveform, repeat);
