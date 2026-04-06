@@ -20,7 +20,7 @@ brew install matmercer/tap/mactic
 ### Manual install
 
 ```bash
-sudo curl -L https://github.com/MatMercer/mactic/releases/latest/download/mactic -o /usr/local/bin/mactic && sudo chmod +x /usr/local/bin/mactic
+curl -L https://github.com/MatMercer/mactic/releases/latest/download/mactic-macos.tar.gz | sudo tar xz -C /usr/local/bin
 
 # Play with it
 mactic -a
