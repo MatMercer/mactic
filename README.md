@@ -2,7 +2,21 @@
 
 Command-line tool to send haptic waveforms and visualize multitouch input on the Force Touch trackpad of MacBooks.
 
+![demo](media/demo_v1.gif)
+
 Uses Apple's private `MultitouchSupport.framework` to directly drive the haptic actuator and read raw touch data — no Xcode project or Swift required.
+
+## Quick install
+
+```bash
+sudo curl -L https://github.com/MatMercer/mactic/releases/latest/download/mactic -o /usr/local/bin/mactic && sudo chmod +x /usr/local/bin/mactic
+
+# Play with it
+mactic -a
+
+# Test the feedbacks
+mactic -l
+```
 
 ## Requirements
 
